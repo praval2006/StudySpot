@@ -36,6 +36,7 @@ type CampusSearchLocation = {
 
 type ThemePreference = "light" | "dark";
 type LocationState = "idle" | "locating" | "ready" | "denied" | "manual" | "error";
+type AppView = "recommendation" | "dashboard";
 
 const statusLabels: Record<StudyStatus, string> = {
   available: "Available",
@@ -106,6 +107,7 @@ export default function Home() {
   );
   const [isLocating, setIsLocating] = useState(false);
   const [showLocationPrompt, setShowLocationPrompt] = useState(true);
+  const [appView, setAppView] = useState<AppView>("recommendation");
 
   useEffect(() => {
     // Theme logic:
@@ -217,6 +219,38 @@ export default function Home() {
       .sort((a, b) => (a.distance ?? Number.MAX_VALUE) - (b.distance ?? Number.MAX_VALUE));
   }, [locations, userLocation]);
 
+  const rankedLocations = useMemo(() => {
+    const finiteDistances = locationsWithDistance
+      .map((location) => location.distance)
+      .filter((distance): distance is number => distance !== null);
+    const nearestDistance = finiteDistances.length > 0 ? Math.min(...finiteDistances) : 0;
+    const furthestDistance = finiteDistances.length > 0 ? Math.max(...finiteDistances) : 0;
+    const distanceRange = Math.max(furthestDistance - nearestDistance, 1);
+
+    // Ranking logic:
+    // combines closeness and emptiness so students can compare all options.
+    // Available spots score highest, busy spots stay useful, full spots rank lowest.
+    return locationsWithDistance
+      .map((location) => {
+        const availabilityScore = getAvailabilityScore(location.status);
+        const distanceScore =
+          location.distance === null
+            ? 0
+            : 100 - ((location.distance - nearestDistance) / distanceRange) * 100;
+        const rankScore = Math.round(availabilityScore * 0.58 + distanceScore * 0.42);
+
+        return {
+          ...location,
+          rankScore
+        };
+      })
+      .sort((a, b) => b.rankScore - a.rankScore || (a.distance ?? 0) - (b.distance ?? 0))
+      .map((location, index) => ({
+        ...location,
+        rank: index + 1
+      }));
+  }, [locationsWithDistance]);
+
   const bestSpot = useMemo(() => {
     if (locationsWithDistance.length === 0) {
       return null;
@@ -266,6 +300,7 @@ export default function Home() {
         });
         setLocationMessage("Location found. Distances are sorted from nearest first.");
         setLocationState("ready");
+        setAppView("recommendation");
         setIsLocating(false);
       },
       () => {
@@ -273,6 +308,7 @@ export default function Home() {
           "Location permission was denied. You can type a campus location instead."
         );
         setLocationState("denied");
+        setAppView("dashboard");
         setIsLocating(false);
       },
       {
@@ -312,6 +348,7 @@ export default function Home() {
     setTypedLocation("");
     setShowLocationPrompt(false);
     setLocationState("manual");
+    setAppView("recommendation");
     setLocationMessage(`Using ${selectedLocation.name}. Distances are sorted from nearest first.`);
   }
 
@@ -402,7 +439,10 @@ export default function Home() {
             </form>
 
             <button
-              onClick={() => setShowLocationPrompt(false)}
+              onClick={() => {
+                setShowLocationPrompt(false);
+                setAppView("dashboard");
+              }}
               className="mt-3 inline-flex min-h-10 w-full items-center justify-center rounded-xl text-sm font-semibold text-ink/55 transition hover:bg-ink/5 hover:text-ink dark:text-white/50 dark:hover:bg-white/5 dark:hover:text-white"
             >
               Continue without location
@@ -447,6 +487,70 @@ export default function Home() {
           </div>
         </header>
 
+        {appView === "recommendation" ? (
+          <section className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+            <div className="rounded-2xl border border-gumleaf/30 bg-white p-6 shadow-soft dark:border-emerald-400/30 dark:bg-[#18221d]">
+              <p className="text-sm font-semibold text-gumleaf dark:text-emerald-300">
+                Closest Available Recommendation
+              </p>
+              <h2 className="mt-3 text-3xl font-bold text-ink dark:text-white">
+                {bestSpot ? bestSpot.name : "No recommendation yet"}
+              </h2>
+
+              <div className="mt-5 rounded-xl bg-[#eef4ed] p-4 dark:bg-[#111a16]">
+                {bestSpot ? (
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-sm text-ink/65 dark:text-white/65">
+                        Distance from you
+                      </p>
+                      <p className="text-4xl font-bold text-ink dark:text-white">
+                        {formatDistance(bestSpot.distance)}
+                      </p>
+                    </div>
+                    <div className="flex flex-col items-start gap-2 sm:items-end">
+                      <StatusBadge status={bestSpot.status} />
+                      <p className="text-sm font-semibold text-ink/65 dark:text-white/65">
+                        Rank #{getRankForLocation(rankedLocations, bestSpot.id)}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm leading-6 text-ink/70 dark:text-white/70">
+                    Choose your current location or type a campus place to calculate the closest
+                    study spot.
+                  </p>
+                )}
+              </div>
+
+              <p className="mt-4 text-sm leading-6 text-ink/70 dark:text-white/70">
+                {!hasAvailableSpot && bestSpot
+                  ? "No available spaces were found, so this is the closest busy option."
+                  : "This result prioritises available seats first, then distance from your chosen location."}
+              </p>
+            </div>
+
+            <aside className="rounded-2xl border border-ink/10 bg-white p-5 dark:border-white/10 dark:bg-[#18221d]">
+              <p className="text-sm font-semibold text-gumleaf dark:text-emerald-300">
+                Want more options?
+              </p>
+              <h3 className="mt-2 text-2xl font-bold text-ink dark:text-white">
+                Find other spots
+              </h3>
+              <p className="mt-3 text-sm leading-6 text-ink/65 dark:text-white/65">
+                Open the full dashboard to compare all study spaces, rankings, distances, and
+                live seat updates.
+              </p>
+              <button
+                onClick={() => setAppView("dashboard")}
+                className="mt-5 inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-gumleaf px-4 text-sm font-semibold text-white transition hover:bg-[#255a4c] active:scale-[0.99] dark:bg-emerald-500 dark:text-[#07110d] dark:hover:bg-emerald-400"
+              >
+                Show all study spots
+              </button>
+            </aside>
+          </section>
+        ) : (
+          <>
         <section className="rounded-2xl border border-gumleaf/15 bg-white p-5 dark:border-emerald-400/15 dark:bg-[#18221d]">
           <p className="text-sm leading-6 text-ink/70 dark:text-white/70">
             Live seat availability is updated by students. Last updated times help you judge
@@ -583,23 +687,31 @@ export default function Home() {
               </h2>
             </div>
             <p className="text-sm text-ink/60 dark:text-white/60">
-              {locationsWithDistance.length} spots
+              {rankedLocations.length} spots
             </p>
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">
-            {locationsWithDistance.map((location) => (
+            {rankedLocations.map((location) => (
               <article
                 key={location.id}
                 className="rounded-2xl border border-ink/10 bg-white p-5 transition hover:border-gumleaf/35 hover:shadow-soft dark:border-white/10 dark:bg-[#18221d] dark:hover:border-emerald-400/35"
               >
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <h3 className="text-xl font-bold text-ink dark:text-white">
-                      {location.name}
-                    </h3>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full bg-[#eef4ed] px-2.5 py-1 text-xs font-bold text-gumleaf dark:bg-[#111a16] dark:text-emerald-300">
+                        #{location.rank}
+                      </span>
+                      <h3 className="text-xl font-bold text-ink dark:text-white">
+                        {location.name}
+                      </h3>
+                    </div>
                     <p className="mt-2 text-sm text-ink/60 dark:text-white/60">
                       Last updated {formatUpdatedAt(location.updatedAt)}
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-ink/50 dark:text-white/50">
+                      Ranking score {location.rankScore}/100
                     </p>
                   </div>
                   <StatusBadge status={location.status} />
@@ -631,6 +743,8 @@ export default function Home() {
             ))}
           </div>
         </section>
+          </>
+        )}
       </div>
     </main>
   );
@@ -669,6 +783,22 @@ function formatDistance(distance: number | null) {
   }
 
   return `${(distance / 1000).toFixed(1)} km`;
+}
+
+function getAvailabilityScore(status: StudyStatus) {
+  if (status === "available") {
+    return 100;
+  }
+
+  if (status === "busy") {
+    return 55;
+  }
+
+  return 10;
+}
+
+function getRankForLocation(rankedLocations: Array<{ id: string; rank: number }>, locationId: string) {
+  return rankedLocations.find((location) => location.id === locationId)?.rank ?? "-";
 }
 
 function findCampusLocation(searchText: string) {
