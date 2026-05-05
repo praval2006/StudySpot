@@ -78,3 +78,4 @@ The first time the app runs, it seeds the `locations` collection if it is empty.
 ## Deploy
 
 See [DEPLOYMENT.md](./DEPLOYMENT.md) for Vercel deployment steps, Firebase environment variables, and production testing notes.
+# StudySpot
