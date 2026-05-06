@@ -107,6 +107,7 @@ export default function Home() {
   const [locationMessage, setLocationMessage] = useState(
     "Share your location to find the closest spot."
   );
+  const [locationHelp, setLocationHelp] = useState("");
   const [isLocating, setIsLocating] = useState(false);
   const [showLocationPrompt, setShowLocationPrompt] = useState(true);
   const [appView, setAppView] = useState<AppView>("recommendation");
@@ -290,6 +291,7 @@ export default function Home() {
     setLocationState("locating");
     setShowLocationPrompt(false);
     setLocationMessage("Finding your location...");
+    setLocationHelp("");
 
     function usePosition(position: GeolocationPosition) {
       setUserLocation({
@@ -297,14 +299,18 @@ export default function Home() {
         lng: position.coords.longitude
       });
       setLocationMessage("Location found. Distances are sorted from nearest first.");
+      setLocationHelp("");
       setLocationState("ready");
       setAppView("recommendation");
       setIsLocating(false);
     }
 
     function handleLocationError(error: GeolocationPositionError) {
-      setLocationMessage(getLocationErrorMessage(error));
-      setLocationState(error.code === error.PERMISSION_DENIED ? "denied" : "error");
+      const locationError = getLocationError(error);
+
+      setLocationMessage(locationError.message);
+      setLocationHelp(locationError.help);
+      setLocationState(locationError.state);
       setAppView("dashboard");
       setIsLocating(false);
     }
@@ -366,6 +372,7 @@ export default function Home() {
     setTypedLocation("");
     setShowLocationPrompt(false);
     setLocationState("manual");
+    setLocationHelp("");
     setAppView("recommendation");
     setLocationMessage(`Using ${selectedLocation.name}. Distances are sorted from nearest first.`);
   }
@@ -679,15 +686,25 @@ export default function Home() {
             </p>
             {locationState === "denied" ? (
               <p className="mt-3 rounded-md border border-red-500/25 bg-red-50 p-3 text-sm font-semibold text-red-700 dark:border-red-400/30 dark:bg-red-950/40 dark:text-red-200">
-                Location permission is off. Type a campus place below to keep using
-                recommendations.
+                {locationHelp ||
+                  "Location permission is off. Type a campus place below to keep using recommendations."}
               </p>
             ) : null}
             {locationState === "error" ? (
               <p className="mt-3 rounded-md border border-amber-500/35 bg-amber-50 p-3 text-sm font-semibold text-amber-900 dark:border-amber-400/35 dark:bg-amber-950/40 dark:text-amber-100">
-                Your browser allowed location, but did not return a position. Check Location
-                Services, then try current location again.
+                {locationHelp ||
+                  "Your browser allowed location, but did not return a position. Check Location Services, then try current location again."}
               </p>
+            ) : null}
+            {(locationState === "denied" || locationState === "error") ? (
+              <button
+                type="button"
+                onClick={requestLocation}
+                disabled={isLocating}
+                className="mt-3 inline-flex min-h-12 w-full items-center justify-center rounded-md border border-gumleaf/35 bg-white px-4 text-sm font-semibold text-gumleaf transition hover:bg-[#eef4ed] active:translate-y-px disabled:cursor-not-allowed disabled:opacity-70 dark:border-emerald-400/35 dark:bg-[#111a16] dark:text-emerald-300 dark:hover:bg-[#17231d]"
+              >
+                {isLocating ? "Finding..." : "Try current location again"}
+              </button>
             ) : null}
             <p className="mt-4 text-sm leading-6 text-ink/65 dark:text-white/65">
               Your location is used in the browser to calculate distance. The app only writes
@@ -880,20 +897,57 @@ function getActivityDotStyles(status: StudyStatus) {
   return "bg-red-600 dark:bg-red-400";
 }
 
-function getLocationErrorMessage(error: GeolocationPositionError) {
+function getLocationError(error: GeolocationPositionError): {
+  message: string;
+  help: string;
+  state: LocationState;
+} {
   if (error.code === error.PERMISSION_DENIED) {
-    return "Location permission is off. You can type a campus location instead.";
+    if (isInAppBrowser()) {
+      return {
+        message: "This in-app browser blocked location access.",
+        help:
+          "Open StudySpotter in Safari or Chrome, then tap Use current location again. WhatsApp's browser can block GPS even after you tap allow.",
+        state: "error"
+      };
+    }
+
+    return {
+      message: "Location permission is off. You can type a campus location instead.",
+      help:
+        "Turn location permission on for this browser, then tap Try current location again.",
+      state: "denied"
+    };
   }
 
   if (error.code === error.POSITION_UNAVAILABLE) {
-    return "Location is allowed, but your phone could not find a position. Try again with Location Services on.";
+    return {
+      message: "Location is allowed, but your phone could not find a position.",
+      help:
+        "Check that Location Services are on, step near a window if indoors, then try current location again.",
+      state: "error"
+    };
   }
 
   if (error.code === error.TIMEOUT) {
-    return "Location is allowed, but your phone took too long to respond. Try again or type a campus place.";
+    return {
+      message: "Location is allowed, but your phone took too long to respond.",
+      help: "Try current location again, or type a campus place if your GPS is slow indoors.",
+      state: "error"
+    };
   }
 
-  return "Location could not be found. Try again or type a campus place.";
+  return {
+    message: "Location could not be found.",
+    help: "Try current location again or type a campus place.",
+    state: "error"
+  };
+}
+
+function isInAppBrowser() {
+  const userAgent = navigator.userAgent.toLowerCase();
+
+  return /whatsapp|instagram|fbav|fban|line|messenger|wv/.test(userAgent);
 }
 
 function formatDistance(distance: number | null) {
