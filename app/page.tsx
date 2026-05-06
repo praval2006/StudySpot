@@ -58,6 +58,12 @@ const selectedStatusButtonStyles: Record<StudyStatus, string> = {
     "border-red-700 bg-red-700 text-white shadow-sm dark:border-red-400 dark:bg-red-500"
 };
 
+const geolocationErrorCodes = {
+  permissionDenied: 1,
+  positionUnavailable: 2,
+  timeout: 3
+} as const;
+
 const initialStudyLocations: StudyLocation[] = seedStudyLocations.map((location) => ({
   ...location,
   updatedAt: null
@@ -293,7 +299,29 @@ export default function Home() {
     setLocationMessage("Finding your location...");
     setLocationHelp("");
 
+    let hasFinishedLocationRequest = false;
+    let watchId: number | null = null;
+    let mobileTimeoutId: number | null = null;
+
+    function stopWatchingLocation() {
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+      }
+
+      if (mobileTimeoutId !== null) {
+        window.clearTimeout(mobileTimeoutId);
+        mobileTimeoutId = null;
+      }
+    }
+
     function usePosition(position: GeolocationPosition) {
+      if (hasFinishedLocationRequest) {
+        return;
+      }
+
+      hasFinishedLocationRequest = true;
+      stopWatchingLocation();
       setUserLocation({
         lat: position.coords.latitude,
         lng: position.coords.longitude
@@ -306,6 +334,12 @@ export default function Home() {
     }
 
     function handleLocationError(error: GeolocationPositionError) {
+      if (hasFinishedLocationRequest) {
+        return;
+      }
+
+      hasFinishedLocationRequest = true;
+      stopWatchingLocation();
       const locationError = getLocationError(error);
 
       setLocationMessage(locationError.message);
@@ -317,12 +351,26 @@ export default function Home() {
 
     // Browser geolocation gives the user's current coordinates.
     // Those coordinates are only stored in local React state, not in Firestore.
-    // Mobile browsers can need longer than desktop to return a GPS fix, so a slow
-    // first attempt gets one higher-accuracy retry before falling back to typing.
+    // Mobile browsers can be slow or inconsistent with getCurrentPosition, so
+    // watchPosition runs as a backup and whichever method returns first wins.
+    watchId = navigator.geolocation.watchPosition(usePosition, undefined, {
+      enableHighAccuracy: true,
+      timeout: 25000,
+      maximumAge: 0
+    });
+    mobileTimeoutId = window.setTimeout(() => {
+      if (!hasFinishedLocationRequest) {
+        handleLocationError(createLocationTimeoutError());
+      }
+    }, 28000);
+
     navigator.geolocation.getCurrentPosition(
       usePosition,
       (firstError) => {
-        if (firstError.code === firstError.PERMISSION_DENIED) {
+        if (
+          firstError.code === geolocationErrorCodes.permissionDenied &&
+          !isMobileBrowser()
+        ) {
           handleLocationError(firstError);
           return;
         }
@@ -902,7 +950,7 @@ function getLocationError(error: GeolocationPositionError): {
   help: string;
   state: LocationState;
 } {
-  if (error.code === error.PERMISSION_DENIED) {
+  if (error.code === geolocationErrorCodes.permissionDenied) {
     if (isInAppBrowser()) {
       return {
         message: "This in-app browser blocked location access.",
@@ -920,7 +968,7 @@ function getLocationError(error: GeolocationPositionError): {
     };
   }
 
-  if (error.code === error.POSITION_UNAVAILABLE) {
+  if (error.code === geolocationErrorCodes.positionUnavailable) {
     return {
       message: "Location is allowed, but your phone could not find a position.",
       help:
@@ -929,7 +977,7 @@ function getLocationError(error: GeolocationPositionError): {
     };
   }
 
-  if (error.code === error.TIMEOUT) {
+  if (error.code === geolocationErrorCodes.timeout) {
     return {
       message: "Location is allowed, but your phone took too long to respond.",
       help: "Try current location again, or type a campus place if your GPS is slow indoors.",
@@ -942,6 +990,17 @@ function getLocationError(error: GeolocationPositionError): {
     help: "Try current location again or type a campus place.",
     state: "error"
   };
+}
+
+function createLocationTimeoutError() {
+  return {
+    code: geolocationErrorCodes.timeout,
+    message: "Location request timed out."
+  } as GeolocationPositionError;
+}
+
+function isMobileBrowser() {
+  return /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent);
 }
 
 function isInAppBrowser() {
