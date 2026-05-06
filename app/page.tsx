@@ -291,32 +291,48 @@ export default function Home() {
     setShowLocationPrompt(false);
     setLocationMessage("Finding your location...");
 
+    function usePosition(position: GeolocationPosition) {
+      setUserLocation({
+        lat: position.coords.latitude,
+        lng: position.coords.longitude
+      });
+      setLocationMessage("Location found. Distances are sorted from nearest first.");
+      setLocationState("ready");
+      setAppView("recommendation");
+      setIsLocating(false);
+    }
+
+    function handleLocationError(error: GeolocationPositionError) {
+      setLocationMessage(getLocationErrorMessage(error));
+      setLocationState(error.code === error.PERMISSION_DENIED ? "denied" : "error");
+      setAppView("dashboard");
+      setIsLocating(false);
+    }
+
     // Browser geolocation gives the user's current coordinates.
     // Those coordinates are only stored in local React state, not in Firestore.
-    // Low accuracy is much faster for this MVP because we only need campus-level distance.
+    // Mobile browsers can need longer than desktop to return a GPS fix, so a slow
+    // first attempt gets one higher-accuracy retry before falling back to typing.
     navigator.geolocation.getCurrentPosition(
-      (position) => {
-        setUserLocation({
-          lat: position.coords.latitude,
-          lng: position.coords.longitude
+      usePosition,
+      (firstError) => {
+        if (firstError.code === firstError.PERMISSION_DENIED) {
+          handleLocationError(firstError);
+          return;
+        }
+
+        setLocationMessage("Still finding your phone's location...");
+
+        navigator.geolocation.getCurrentPosition(usePosition, handleLocationError, {
+          enableHighAccuracy: true,
+          timeout: 20000,
+          maximumAge: 0
         });
-        setLocationMessage("Location found. Distances are sorted from nearest first.");
-        setLocationState("ready");
-        setAppView("recommendation");
-        setIsLocating(false);
-      },
-      () => {
-        setLocationMessage(
-          "Location permission was denied. You can type a campus location instead."
-        );
-        setLocationState("denied");
-        setAppView("dashboard");
-        setIsLocating(false);
       },
       {
         enableHighAccuracy: false,
-        timeout: 5000,
-        maximumAge: 300000
+        timeout: 12000,
+        maximumAge: 120000
       }
     );
   }
@@ -667,6 +683,12 @@ export default function Home() {
                 recommendations.
               </p>
             ) : null}
+            {locationState === "error" ? (
+              <p className="mt-3 rounded-md border border-amber-500/35 bg-amber-50 p-3 text-sm font-semibold text-amber-900 dark:border-amber-400/35 dark:bg-amber-950/40 dark:text-amber-100">
+                Your browser allowed location, but did not return a position. Check Location
+                Services, then try current location again.
+              </p>
+            ) : null}
             <p className="mt-4 text-sm leading-6 text-ink/65 dark:text-white/65">
               Your location is used in the browser to calculate distance. The app only writes
               study spot status and update time to Firestore.
@@ -856,6 +878,22 @@ function getActivityDotStyles(status: StudyStatus) {
   }
 
   return "bg-red-600 dark:bg-red-400";
+}
+
+function getLocationErrorMessage(error: GeolocationPositionError) {
+  if (error.code === error.PERMISSION_DENIED) {
+    return "Location permission is off. You can type a campus location instead.";
+  }
+
+  if (error.code === error.POSITION_UNAVAILABLE) {
+    return "Location is allowed, but your phone could not find a position. Try again with Location Services on.";
+  }
+
+  if (error.code === error.TIMEOUT) {
+    return "Location is allowed, but your phone took too long to respond. Try again or type a campus place.";
+  }
+
+  return "Location could not be found. Try again or type a campus place.";
 }
 
 function formatDistance(distance: number | null) {
